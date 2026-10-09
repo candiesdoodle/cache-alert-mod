@@ -2,7 +2,7 @@
 
 A Claude Code mod that warns you before your session's prompt cache expires, so you can send a message and keep it warm instead of paying to rebuild the cache.
 
-It shows a countdown in Claude Code's status line. When the alert fires you get an in-terminal toast, a desktop notification, and (optionally) a Telegram message on your phone.
+It shows a live countdown in a one-line band just above the prompt. When the alert fires you get an in-terminal toast, a desktop notification, and (optionally) a Telegram message on your phone.
 
 ## Install
 
@@ -29,7 +29,9 @@ A setup pane opens:
 
 Settings are saved across sessions. Without Telegram you still get the toast and the desktop notification.
 
-## Status line
+## The band
+
+The time left is coloured green, yellow or red to match the icon. Collapse the band with its `[-]` mark.
 
 | Shown | Meaning |
 | --- | --- |

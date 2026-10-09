@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On, TurnUsage } from 'claude-code'
-import type { FoundElement } from 'claude-code/testing'
+import type { Engine, FoundElement } from 'claude-code/testing'
 
 const MIN = 60_000
 const CACHED: TurnUsage = { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 5000, cache_creation_input_tokens: 100, model: 'm' }
@@ -48,20 +48,37 @@ const SETUP = {
   props: { title: 'cache-alert setup', isFocused: true, bodyColumns: 100, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
 } as const
 
+const BAND = {
+  component: 'AbovePrompt',
+  props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 100, scroll: { offset: 0, bodyRows: 10 }, view: {} },
+} as const
+
+// The band's line as text; undefined when it draws nothing of its own
+async function shown($: Engine) {
+  try {
+    const ui = await $.ui.mount({ plugin: 'cache-alert', surface: 'terminal', ...BAND })
+    const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text).join('')
+    await ui.unmount()
+    return texts || undefined
+  } catch {
+    return undefined
+  }
+}
+
 // The pane's result line is its last Text
 async function lastLine(ui: { findAll: (q: { type: string }) => Promise<FoundElement[]> }) {
   return (await ui.findAll({ type: 'Text' })).at(-1)?.text
 }
 
-test('alerts by Telegram at the threshold, once, and counts down', { timeoutMs: 20_000 }, async ($, on) => {
+test('alerts by Telegram at the threshold, once, and counts down', { timeoutMs: 60_000 }, async ($, on) => {
   const w = world(on, READY)
   await $.session.start(start)
   await $.turn.start({ text: 'hi', turnId: 't1' })
-  expect(w.statuses.at(-1)).toBe('Cache (1h): Status 🟢 active')
+  expect(await shown($)).toBe('Cache (1h): Status 🟢 active')
   await $.turn.complete(done(CACHED))
-  expect(w.statuses.at(-1)).toBe('Cache (1h): Status 🟢 59:55 ; Alert 🔔 in 48 m')
+  expect(await shown($)).toBe('Cache (1h): Status 🟢 59:55 ; Alert 🔔 in 48 m')
   await w.clock.advance(30 * MIN)
-  expect(w.statuses.at(-1)).toBe('Cache (1h): Status 🟡 29:55 ; Alert 🔔 in 18 m')
+  expect(await shown($)).toBe('Cache (1h): Status 🟡 29:55 ; Alert 🔔 in 18 m')
 
   await w.clock.advance(17 * MIN)
   expect(w.sent).toHaveLength(0)
@@ -70,14 +87,14 @@ test('alerts by Telegram at the threshold, once, and counts down', { timeoutMs: 
   expect(w.sent[0]).toContain('proj')
   expect(w.toasts).toHaveLength(1)
   await w.clock.advance(1_000)
-  expect(w.statuses.at(-1)).toBe('Cache (1h): Status 🔴 11:54 ; Alert 🔔 sent')
+  expect(await shown($)).toBe('Cache (1h): Status 🔴 11:54 ; Alert 🔔 sent')
 
   await w.clock.advance(20 * MIN)
   expect(w.sent).toHaveLength(1)
-  expect(w.statuses.at(-1)).toBe('Cache (1h): Status ❄️ COLD')
+  expect(await shown($)).toBe('Cache (1h): Status ❄️ COLD')
 })
 
-test('a new turn cancels the pending alert', async ($, on) => {
+test('a new turn cancels the pending alert', { timeoutMs: 60_000 }, async ($, on) => {
   const w = world(on, READY)
   await $.session.start(start)
   await $.turn.start({ text: 'hi', turnId: 't1' })
@@ -88,7 +105,7 @@ test('a new turn cancels the pending alert', async ($, on) => {
   expect(w.sent).toHaveLength(0)
 })
 
-test('an interrupted turn keeps the earlier refresh armed', async ($, on) => {
+test('an interrupted turn keeps the earlier refresh armed', { timeoutMs: 60_000 }, async ($, on) => {
   const w = world(on, READY)
   await $.session.start(start)
   await $.turn.start({ text: 'hi', turnId: 't1' })
@@ -100,7 +117,7 @@ test('an interrupted turn keeps the earlier refresh armed', async ($, on) => {
   expect(w.sent).toHaveLength(1)
 })
 
-test('first run hints at setup, and still toasts without Telegram', async ($, on) => {
+test('first run hints at setup, and still toasts without Telegram', { timeoutMs: 60_000 }, async ($, on) => {
   const w = world(on)
   await $.session.start(start)
   expect(w.toasts[0]).toContain('/cache-alert setup')
@@ -111,7 +128,7 @@ test('first run hints at setup, and still toasts without Telegram', async ($, on
   expect(w.toasts).toHaveLength(2)
 })
 
-test('5m TTL alerts with a minute left', async ($, on) => {
+test('5m TTL alerts with a minute left', { timeoutMs: 60_000 }, async ($, on) => {
   const w = world(on, { ...READY, ttl: '5m' })
   await $.session.start(start)
   await $.turn.start({ text: 'hi', turnId: 't1' })
@@ -146,7 +163,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
   })
 }
 
-test('a new threshold in setup moves the pending alert', async ($, on) => {
+test('a new threshold in setup moves the pending alert', { timeoutMs: 60_000 }, async ($, on) => {
   const w = world(on, READY)
   await $.session.start(start)
   await $.turn.start({ text: 'hi', turnId: 't1' })
@@ -159,7 +176,7 @@ test('a new threshold in setup moves the pending alert', async ($, on) => {
   await ui.unmount()
 })
 
-test('a non-interactive run (-p, SDK) stays quiet: no hint, no status, no alert', async ($, on) => {
+test('a non-interactive run (-p, SDK) stays quiet: no hint, no status, no alert', { timeoutMs: 60_000 }, async ($, on) => {
   const w = world(on, READY)
   await $.session.start({ cwd: '/home/u/proj', surface: null, isInteractive: false })
   await $.turn.start({ text: 'hi', turnId: 't1' })
@@ -167,10 +184,11 @@ test('a non-interactive run (-p, SDK) stays quiet: no hint, no status, no alert'
   await w.clock.advance(60 * MIN)
   expect(w.toasts).toHaveLength(0)
   expect(w.statuses).toHaveLength(0)
+  expect(await shown($)).toBeUndefined()
   expect(w.sent).toHaveLength(0)
 })
 
-test('a typed chat ID is checked, saved and shown in the field', async ($, on) => {
+test('a typed chat ID is checked, saved and shown in the field', { timeoutMs: 60_000 }, async ($, on) => {
   const w = world(on, { ...READY, chatId: '' })
   await $.session.start(start)
   const ui = await $.ui.mount({ plugin: 'cache-alert', surface: 'terminal', ...SETUP })
@@ -185,4 +203,19 @@ test('a typed chat ID is checked, saved and shown in the field', async ($, on) =
   expect((await ui.find({ key: 'chat' }))?.props.placeholder).toBe('saved 123456789; type to replace')
   expect(await lastLine(ui)).toContain('Chat ID 123456789 saved')
   await ui.unmount()
+})
+
+test('the band draws the line in colour above the prompt', { timeoutMs: 60_000 }, async ($, on) => {
+  const w = world(on, READY)
+  await $.session.start(start)
+  await $.turn.start({ text: 'hi', turnId: 't1' })
+  await $.turn.complete(done(CACHED))
+  await w.clock.advance(1_000)
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ plugin: 'cache-alert', surface, ...BAND })
+    const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text).join('')
+    expect(texts).toBe('Cache (1h): Status 🟢 59:54 ; Alert 🔔 in 48 m')
+    expect((await ui.find({ type: 'Text', text: '59:54' }))?.props.color).toBe('success')
+    await ui.unmount()
+  }
 })

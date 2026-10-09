@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
-import type { CacheTrack, AlertSettings, SetupNote } from '../types'
+import type { AlertSettings, CacheLine, CacheTrack, SetupNote } from '../types'
 
 const EMPTY: CacheTrack = { mode: 'none', lastRequestAt: 0, isAlerted: false }
 const DEFAULTS: AlertSettings = { botToken: '', botName: '', chatId: '', ttl: '1h', thresholdPercent: 20, sound: true, nativeNotify: true }
@@ -11,18 +11,18 @@ const track = atom({ plugin: 'cache-alert', key: 'track' } as const, EMPTY)
 const info = atom({ plugin: 'cache-alert', key: 'info' } as const, { transcriptPath: '', title: '' })
 const settings = atom({ plugin: 'cache-alert', key: 'settings' } as const, DEFAULTS)
 const note = atom({ plugin: 'cache-alert', key: 'note' } as const, null as SetupNote)
+const line = atom({ plugin: 'cache-alert', key: 'line' } as const, null as CacheLine)
 
 const STORE_KEY = 'settings'
 const SETUP = 'cache-alert-setup'
 // Treat the cache as gone a little before the TTL says
 const SAFETY_MARGIN_MS = 5_000
 const RETRY_MS = 20_000
-// The status shows a mm:ss clock; it is only redrawn when its text changes
+// The band shows a mm:ss clock; it is only redrawn when its text changes
 const TICK_MS = 1_000
 
 // Module variables start over on each reload, as these should
 let alertTimer: Timer | undefined
-let shownStatus: string | undefined
 // False under `claude -p` and the SDK: no one is at the prompt to act on an alert
 let isInteractive = true
 
@@ -34,9 +34,13 @@ function fmtClock(ms: number): string {
 }
 
 // Green with more than half the TTL left, yellow down to the alert threshold, red inside it
-function warmthIcon(left: number, s: AlertSettings): string {
-  if (left <= leadMs(s)) return '🔴'
-  return left <= ttlMs(s) / 2 ? '🟡' : '🟢'
+function warmth(left: number, s: AlertSettings): { icon: string; tone: 'success' | 'warning' | 'error' } {
+  if (left <= leadMs(s)) return { icon: '🔴', tone: 'error' }
+  return left <= ttlMs(s) / 2 ? { icon: '🟡', tone: 'warning' } : { icon: '🟢', tone: 'success' }
+}
+
+function lineText(l: NonNullable<CacheLine>): string {
+  return `Cache (${l.ttl}): Status ${l.icon} ${l.state}${l.alert === null ? '' : ` ; Alert 🔔 ${l.alert}`}`
 }
 
 function fmt(ms: number): string {
@@ -184,25 +188,29 @@ async function sessionLabel($: EngineInterface): Promise<string> {
   return i.title || slug || (await $.session.id()).slice(0, 8)
 }
 
-async function statusText($: EngineInterface): Promise<string | undefined> {
+async function cacheLine($: EngineInterface): Promise<CacheLine> {
   const t = await read($, track)
   const s = await read($, settings)
-  if (t.mode === 'none') return undefined
-  const head = `Cache (${s.ttl}): Status`
-  if (t.mode === 'working') return `${head} 🟢 active`
-  if (t.mode === 'compacted') return `${head} ♻️ reset by /compact`
+  if (t.mode === 'none') return null
+  const at = { ttl: s.ttl, alert: null }
+  if (t.mode === 'working') return { ...at, icon: '🟢', state: 'active', tone: 'success' }
+  if (t.mode === 'compacted') return { ...at, icon: '♻️', state: 'reset by /compact', tone: 'subtle' }
   const left = expiresAt(t, s) - (await $.clock.now())
-  if (left <= 0) return `${head} ❄️ COLD`
+  if (left <= 0) return { ...at, icon: '❄️', state: 'COLD', tone: 'subtle' }
   const alertIn = left - leadMs(s)
   const alert = t.isAlerted ? 'sent' : alertIn > 0 ? `in ${fmt(alertIn).replace(/(\d)([ms])$/, '$1 $2')}` : 'due'
-  return `${head} ${warmthIcon(left, s)} ${fmtClock(left)} ; Alert 🔔 ${alert}`
+  return { ...at, ...warmth(left, s), state: fmtClock(left), alert }
+}
+
+async function statusText($: EngineInterface): Promise<string | undefined> {
+  const l = await cacheLine($)
+  return l ? lineText(l) : undefined
 }
 
 async function refreshStatus($: EngineInterface) {
-  const text = await statusText($)
-  if (text === shownStatus) return
-  shownStatus = text
-  $.ui.status(text)
+  const next = await cacheLine($)
+  // Written only on a change, so the band redraws once a second at most
+  await update($, line, cur => (JSON.stringify(cur) === JSON.stringify(next) ? cur : next))
 }
 
 async function fire($: EngineInterface, forRequestAt: number, isRetry: boolean) {
@@ -271,6 +279,8 @@ export const register: Register = on => {
     isInteractive = e.isInteractive
     if (!isInteractive) return next(e)
     if (stored === undefined) $.ui.toast('cache-alert: run /cache-alert setup to get Telegram alerts before the prompt cache expires.')
+    // Earlier versions pinned a status line; the band replaces it
+    $.ui.status(undefined)
     $.clock.every(TICK_MS, () => void refreshStatus($))
     // A hot reload keeps $.state but drops timers: re-arm from what was tracked
     await arm($)
@@ -328,7 +338,7 @@ export const register: Register = on => {
   on('session.end', async ($, e, next) => {
     cancelAlert()
     await update($, track, () => EMPTY)
-    $.ui.status(undefined)
+    await update($, line, () => null)
     return next(e)
   })
 
@@ -348,6 +358,23 @@ export const register: Register = on => {
     const status = (await statusText($)) ?? 'No cached turn yet in this session.'
     const telegramLine = isTelegramReady(s) ? `Telegram: @${s.botName || 'bot'} → chat ${s.chatId}` : 'Telegram: not set up (/cache-alert setup)'
     return { text: `${status}\n${telegramLine} · TTL ${s.ttl} · alert at ${s.thresholdPercent}% left` }
+  })
+
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    const l = await read($, line)
+    if (l === null || e.props.hasSurvey) return next(e)
+    const { Box, Text } = $.ui.resolve(e)
+    return (
+      <Box marginTop={1}>
+        <Text dimColor>Cache ({l.ttl}): </Text>
+        <Text>Status {l.icon} </Text>
+        <Text color={l.tone} bold>
+          {l.state}
+        </Text>
+        {l.alert === null ? null : <Text dimColor> ; </Text>}
+        {l.alert === null ? null : <Text>Alert 🔔 {l.alert}</Text>}
+      </Box>
+    )
   })
 
   on('ui.render', { component: 'Pane', requestId: SETUP }, async ($, e) => {

@@ -27,11 +27,22 @@ export type AlertSettings = {
   nativeNotify: boolean
 }
 
+/** What the band above the prompt shows; null when there is no cached turn. */
+export type CacheLine = {
+  ttl: '1h' | '5m'
+  icon: string
+  /** The time left (mm:ss), or active, COLD, reset by /compact. */
+  state: string
+  tone: 'success' | 'warning' | 'error' | 'subtle'
+  /** in 47 m, in 30 s, due, sent; null when there is nothing to alert about. */
+  alert: string | null
+} | null
+
 /** The setup pane's last result line. */
 export type SetupNote = { text: string; isError: boolean } | null
 
 declare module 'claude-code' {
   interface PluginState {
-    'cache-alert': { track: CacheTrack; info: SessionInfo; settings: AlertSettings; note: SetupNote }
+    'cache-alert': { track: CacheTrack; info: SessionInfo; settings: AlertSettings; note: SetupNote; line: CacheLine }
   }
 }
