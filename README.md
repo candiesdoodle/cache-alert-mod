@@ -1,6 +1,6 @@
 # cache-alert 🔔
 
-A Claude Code mod that warns you before your session's prompt cache expires, so you can send a message and keep it warm instead of paying to rebuild the cache.
+A Claude Code mod that warns you before your session's prompt cache expires, and automatically can send a message to keep it warm, or compact or clear the session, instead of paying to rebuild the cache.
 
 It shows a live countdown in a one-line band just above the prompt. When the alert fires you get an in-terminal toast, a desktop notification, and (optionally) a Telegram message on your phone.
 
@@ -25,7 +25,7 @@ A setup pane opens:
 1. In Telegram, message [@BotFather](https://t.me/BotFather), send `/newbot`, and paste the token it gives you into **Bot token**, then press Enter. The mod checks the token with Telegram before saving it.
 2. Send your new bot any message in Telegram, then press **Detect chat**. You can also type a chat ID (a group or channel ID works too).
 3. Under **Cache**, pick the **Cache TTL** (1 hour or 5 minutes) and when to alert (10–50% of the TTL left; 20% of 1h is 12 minutes).
-4. Under **When the alert fires**, tick **Notify** (the toast, plus Desktop and Telegram where set up), pick one thing to do in the chat, or both:
+4. Under **When the alert fires**, tick **Notify** (the toast, plus Desktop and Telegram where set up), pick one thing to do in the chat:
    - **Nothing**: no change to the chat.
    - **Send "be right back"** (the default): sends that message as a prompt, so the reply refreshes the cache. The reply re-arms the alert, so while you are away it repeats on every alert and keeps the cache warm.
    - **Run /compact**: summarises the conversation while the cache is still warm, so the summary is cheaper to make.
