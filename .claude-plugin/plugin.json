@@ -12,5 +12,11 @@
     "notification",
     "cache"
   ],
-  "types": "./types/index.d.ts"
+  "types": "./types/index.d.ts",
+  "homepage": "https://github.com/candiesdoodle/cache-alert-mod",
+  "repository": "https://github.com/candiesdoodle/cache-alert-mod",
+  "documentationUrl": "https://github.com/candiesdoodle/cache-alert-mod#readme",
+  "privacyPolicyUrl": "https://github.com/candiesdoodle/cache-alert-mod#privacy-and-permissions",
+  "supportUrl": "https://github.com/candiesdoodle/cache-alert-mod/issues",
+  "termsOfServiceUrl": "https://github.com/candiesdoodle/cache-alert-mod/blob/main/LICENSE"
 }
