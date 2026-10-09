@@ -82,6 +82,8 @@ What the mod reads, sends, runs and hooks, in full.
 
 **The bot token.** It is your own Telegram bot's token, typed into the setup pane. It is stored in Claude Code's plugin store on your machine and sent only to `api.telegram.org`, as the Bot API requires (in the request path). The mod reads no token from your environment or files.
 
+**What it stores.** In Claude Code's plugin store on your machine: the bot token, the bot's username, your Telegram chat ID and your setup choices. Nothing is stored anywhere else. When you press Detect chat it also reads the name on the chat it finds (your first name or username, or a group's title) to show you which chat it picked; that name is not saved.
+
 **What it reads.**
 
 - Token usage counts from each finished turn (`turn.complete`), to know when the cache was last refreshed. It reads no message text.
