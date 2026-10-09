@@ -36,6 +36,8 @@ export type CacheLine = {
   tone: 'success' | 'warning' | 'error' | 'subtle'
   /** in 47 m, in 30 s, due, sent; null when there is nothing to alert about. */
   alert: string | null
+  /** Where the coming alert goes (Telegram, Desktop); null once there is no alert to come. */
+  channels: string[] | null
 } | null
 
 /** The setup pane's last result line. */
@@ -43,6 +45,6 @@ export type SetupNote = { text: string; isError: boolean } | null
 
 declare module 'claude-code' {
   interface PluginState {
-    'cache-alert': { track: CacheTrack; info: SessionInfo; settings: AlertSettings; note: SetupNote; line: CacheLine }
+    'cache-alert': { track: CacheTrack; info: SessionInfo; settings: AlertSettings; note: SetupNote; line: CacheLine; theme: string }
   }
 }

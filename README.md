@@ -33,6 +33,8 @@ Settings are saved across sessions. Without Telegram you still get the toast and
 
 The time left is coloured green, yellow or red to match the icon. Collapse the band with its `[-]` mark.
 
+Until the alert goes out, the band also says where it will go, for example `Action: Notifications armed for Telegram, Desktop (/cache-alert setup to configure)`. On a narrow terminal that moves to a second row.
+
 | Shown | Meaning |
 | --- | --- |
 | `Cache (1h): Status 🟢 active` | A turn is running, so the cache is being refreshed |

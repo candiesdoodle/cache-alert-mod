@@ -36,7 +36,10 @@ function world(on: On, settings?: object, chats: object[] = []) {
   on('turn.start', ($, e) => ({ turnId: e.turnId }))
   on('turn.complete', ($, e) => ({ text: e.answer }))
   on('session.end', ($, e) => ({ sessionId: e.sessionId }))
-  return { clock, statuses, toasts, sent, store }
+  // The /theme row as /config lists it; a test changes it with setTheme
+  const prefs = { theme: 'dark' }
+  on('config.list', () => ({ value: [{ key: 'theme', value: prefs.theme }] as never }))
+  return { clock, statuses, toasts, sent, store, setTheme: (name: string) => void (prefs.theme = name) }
 }
 
 const start = { cwd: '/home/u/proj', surface: 'terminal', isInteractive: true } as const
@@ -59,7 +62,8 @@ async function shown($: Engine) {
     const ui = await $.ui.mount({ plugin: 'cache-alert', surface: 'terminal', ...BAND })
     const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text).join('')
     await ui.unmount()
-    return texts || undefined
+    // The status alone; the action has tests of its own
+    return texts.split(/( ; )?Action:/)[0] || undefined
   } catch {
     return undefined
   }
@@ -212,10 +216,64 @@ test('the band draws the line in colour above the prompt', { timeoutMs: 60_000 }
   await $.turn.complete(done(CACHED))
   await w.clock.advance(1_000)
   for (const surface of ['terminal', 'desktop'] as const) {
-    const ui = await $.ui.mount({ plugin: 'cache-alert', surface, ...BAND })
+    const ui = await $.ui.mount({ plugin: 'cache-alert', surface, ...BAND, props: { ...BAND.props, bodyColumns: 200 } })
     const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text).join('')
-    expect(texts).toBe('Cache (1h): Status 🟢 59:54 ; Alert 🔔 in 48 m')
+    expect(texts).toBe('Cache (1h): Status 🟢 59:54 ; Alert 🔔 in 48 m ; Action: Notifications armed for Telegram, Desktop (/cache-alert setup to configure)')
     expect((await ui.find({ type: 'Text', text: '59:54' }))?.props.color).toBe('success')
+    const filled = (await ui.findAll({ type: 'Box' })).find(b => b.props.backgroundColor === '#303030')
+    expect(filled?.props.width).toBe(200)
     await ui.unmount()
   }
+})
+
+test('the action names the armed channels, and wraps on a narrow band', { timeoutMs: 60_000 }, async ($, on) => {
+  const w = world(on, { ...READY, nativeNotify: false })
+  await $.session.start(start)
+  await $.turn.start({ text: 'hi', turnId: 't1' })
+  await $.turn.complete(done(CACHED))
+  const narrow = await $.ui.mount({ plugin: 'cache-alert', surface: 'terminal', ...BAND, props: { ...BAND.props, bodyColumns: 60 } })
+  const rows = (await narrow.findAll({ type: 'Text' })).map(t => t.text)
+  expect(rows.at(-1)).toBe('Action: Notifications armed for Telegram (/cache-alert setup to configure)')
+  await narrow.unmount()
+
+  // Once the alert went out there is nothing left to arm
+  await w.clock.advance(48 * MIN)
+  const after = await $.ui.mount({ plugin: 'cache-alert', surface: 'terminal', ...BAND })
+  expect((await after.findAll({ type: 'Text' })).map(t => t.text).join('')).not.toContain('Action:')
+  await after.unmount()
+})
+
+test('without Telegram or desktop notifications the action says toast only', async ($, on) => {
+  world(on, { ...READY, botToken: '', nativeNotify: false })
+  await $.session.start(start)
+  await $.turn.start({ text: 'hi', turnId: 't1' })
+  const ui = await $.ui.mount({ plugin: 'cache-alert', surface: 'terminal', ...BAND })
+  expect((await ui.findAll({ type: 'Text' })).map(t => t.text).join('')).toContain('Action: In-app toast only (/cache-alert setup to configure)')
+  await ui.unmount()
+})
+
+test('the band fill follows the theme, and leaves an auto theme unfilled', { timeoutMs: 60_000 }, async ($, on) => {
+  const w = world(on, READY)
+  await $.session.start(start)
+  await $.turn.start({ text: 'hi', turnId: 't1' })
+  await $.turn.complete(done(CACHED))
+  const fills = async () => {
+    const ui = await $.ui.mount({ plugin: 'cache-alert', surface: 'terminal', ...BAND })
+    const found = (await ui.findAll({ type: 'Box' })).map(b => b.props.backgroundColor).filter(c => c !== undefined)
+    await ui.unmount()
+    return found
+  }
+  expect(await fills()).toEqual(['#303030'])
+  w.setTheme('light')
+  await w.clock.advance(5_000)
+  expect(await fills()).toEqual(['#e4e4e4'])
+  const ui = await $.ui.mount({ plugin: 'cache-alert', surface: 'terminal', ...BAND })
+  const colors = (await ui.findAll({ type: 'Text' })).map(t => t.props.color)
+  await ui.unmount()
+  expect(colors.every(c => typeof c === 'string')).toBe(true)
+  expect(colors).toContain('text')
+  expect(colors).toContain('inactive')
+  w.setTheme('auto')
+  await w.clock.advance(5_000)
+  expect(await fills()).toEqual([])
 })

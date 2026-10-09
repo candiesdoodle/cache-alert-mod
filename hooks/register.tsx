@@ -12,6 +12,8 @@ const info = atom({ plugin: 'cache-alert', key: 'info' } as const, { transcriptP
 const settings = atom({ plugin: 'cache-alert', key: 'settings' } as const, DEFAULTS)
 const note = atom({ plugin: 'cache-alert', key: 'note' } as const, null as SetupNote)
 const line = atom({ plugin: 'cache-alert', key: 'line' } as const, null as CacheLine)
+// The /theme setting as /config holds it ('dark', 'light-daltonized', 'auto', ...); '' until read
+const theme = atom({ plugin: 'cache-alert', key: 'theme' } as const, '')
 
 const STORE_KEY = 'settings'
 const SETUP = 'cache-alert-setup'
@@ -20,6 +22,8 @@ const SAFETY_MARGIN_MS = 5_000
 const RETRY_MS = 20_000
 // The band shows a mm:ss clock; it is only redrawn when its text changes
 const TICK_MS = 1_000
+// /theme may not raise config.set: look again this often
+const THEME_POLL_MS = 5_000
 
 // Module variables start over on each reload, as these should
 let alertTimer: Timer | undefined
@@ -27,6 +31,20 @@ let alertTimer: Timer | undefined
 let isInteractive = true
 
 type TelegramReply = { ok: boolean; description?: string; result?: unknown }
+
+// The band's fill, end to end whatever it shows; none where the theme follows the terminal
+function bandFill(themeName: string): string | undefined {
+  if (themeName.startsWith('dark')) return '#303030'
+  if (themeName.startsWith('light')) return '#e4e4e4'
+  return undefined
+}
+
+async function readTheme($: EngineInterface) {
+  const rows = await $.config.list().catch(() => [])
+  const value = rows.find(row => row.key === 'theme')?.value
+  const next = typeof value === 'string' ? value : ''
+  if ((await read($, theme)) !== next) await update($, theme, () => next)
+}
 
 function fmtClock(ms: number): string {
   const total = Math.ceil(ms / 1000)
@@ -41,6 +59,16 @@ function warmth(left: number, s: AlertSettings): { icon: string; tone: 'success'
 
 function lineText(l: NonNullable<CacheLine>): string {
   return `Cache (${l.ttl}): Status ${l.icon} ${l.state}${l.alert === null ? '' : ` ; Alert 🔔 ${l.alert}`}`
+}
+
+function actionText(channels: readonly string[]): string {
+  const where = channels.length ? `Notifications armed for ${channels.join(', ')}` : 'In-app toast only'
+  return `Action: ${where} (/cache-alert setup to configure)`
+}
+
+// Terminal cells a text takes: an emoji or other astral character takes two
+function cells(text: string): number {
+  return [...text].reduce((n, ch) => n + ((ch.codePointAt(0) ?? 0) > 0xffff ? 2 : 1), 0)
 }
 
 function fmt(ms: number): string {
@@ -192,19 +220,20 @@ async function cacheLine($: EngineInterface): Promise<CacheLine> {
   const t = await read($, track)
   const s = await read($, settings)
   if (t.mode === 'none') return null
-  const at = { ttl: s.ttl, alert: null }
-  if (t.mode === 'working') return { ...at, icon: '🟢', state: 'active', tone: 'success' }
+  const at = { ttl: s.ttl, alert: null, channels: null }
+  const channels = [...(isTelegramReady(s) ? ['Telegram'] : []), ...(s.nativeNotify ? ['Desktop'] : [])]
+  if (t.mode === 'working') return { ...at, icon: '🟢', state: 'active', tone: 'success', channels }
   if (t.mode === 'compacted') return { ...at, icon: '♻️', state: 'reset by /compact', tone: 'subtle' }
   const left = expiresAt(t, s) - (await $.clock.now())
   if (left <= 0) return { ...at, icon: '❄️', state: 'COLD', tone: 'subtle' }
   const alertIn = left - leadMs(s)
   const alert = t.isAlerted ? 'sent' : alertIn > 0 ? `in ${fmt(alertIn).replace(/(\d)([ms])$/, '$1 $2')}` : 'due'
-  return { ...at, ...warmth(left, s), state: fmtClock(left), alert }
+  return { ...at, ...warmth(left, s), state: fmtClock(left), alert, channels: t.isAlerted ? null : channels }
 }
 
 async function statusText($: EngineInterface): Promise<string | undefined> {
   const l = await cacheLine($)
-  return l ? lineText(l) : undefined
+  return l ? lineText(l) + (l.channels ? `\n${actionText(l.channels)}` : '') : undefined
 }
 
 async function refreshStatus($: EngineInterface) {
@@ -282,11 +311,20 @@ export const register: Register = on => {
     // Earlier versions pinned a status line; the band replaces it
     $.ui.status(undefined)
     $.clock.every(TICK_MS, () => void refreshStatus($))
+    await readTheme($)
+    $.clock.every(THEME_POLL_MS, () => void readTheme($))
     // A hot reload keeps $.state but drops timers: re-arm from what was tracked
     await arm($)
     await refreshStatus($)
     return next(e)
   })
+
+  // /theme, or any other setting change: redraw the band in the new theme's fill
+  on('config.set', async ($, e, next) => {
+    const result = await next(e)
+    if (e.key === 'theme') await readTheme($)
+    return result
+  }).catch(($, e, next) => next(e))
 
   on('classic.SessionStart', async ($, e, next) => {
     await update($, info, () => ({ transcriptPath: e.transcript_path, title: e.session_title ?? '' }))
@@ -363,16 +401,28 @@ export const register: Register = on => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const l = await read($, line)
     if (l === null || e.props.hasSurvey) return next(e)
+    const fill = bandFill(await read($, theme))
+    // On a fill, every text takes the theme's colours: the terminal's own foreground may not suit it
+    const plain = fill === undefined ? {} : { color: 'text' }
+    const muted = fill === undefined ? { dimColor: true } : { color: 'inactive' }
     const { Box, Text } = $.ui.resolve(e)
+    const action = l.channels ? actionText(l.channels) : null
+    // The action shares the row while it fits, else takes a row of its own
+    const isOneRow = action === null || cells(`${lineText(l)} ; ${action}`) + 2 <= e.props.bodyColumns
     return (
       <Box marginTop={1}>
-        <Text dimColor>Cache ({l.ttl}): </Text>
-        <Text>Status {l.icon} </Text>
-        <Text color={l.tone} bold>
-          {l.state}
-        </Text>
-        {l.alert === null ? null : <Text dimColor> ; </Text>}
-        {l.alert === null ? null : <Text>Alert 🔔 {l.alert}</Text>}
+        <Box width={e.props.bodyColumns} backgroundColor={fill} paddingX={1} flexDirection={isOneRow ? 'row' : 'column'}>
+          <Box>
+            <Text {...muted}>Cache ({l.ttl}): </Text>
+            <Text {...plain}>Status {l.icon} </Text>
+            <Text color={l.tone} bold>
+              {l.state}
+            </Text>
+            {l.alert === null ? null : <Text {...muted}> ; </Text>}
+            {l.alert === null ? null : <Text {...plain}>Alert 🔔 {l.alert}</Text>}
+          </Box>
+          {action === null ? null : <Text {...muted}>{isOneRow ? ` ; ${action}` : action}</Text>}
+        </Box>
       </Box>
     )
   })
