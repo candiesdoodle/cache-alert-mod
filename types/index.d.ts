@@ -10,7 +10,6 @@ export type CacheTrack = {
 }
 
 export type SessionInfo = {
-  transcriptPath: string
   title: string
 }
 

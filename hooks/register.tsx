@@ -19,7 +19,7 @@ const ACTIONS: readonly { value: AlertAction; label: string }[] = [
 const BRB_TEXT = 'be right back'
 
 const track = atom({ plugin: 'cache-alert', key: 'track' } as const, EMPTY)
-const info = atom({ plugin: 'cache-alert', key: 'info' } as const, { transcriptPath: '', title: '' })
+const info = atom({ plugin: 'cache-alert', key: 'info' } as const, { title: '' })
 const settings = atom({ plugin: 'cache-alert', key: 'settings' } as const, DEFAULTS)
 const note = atom({ plugin: 'cache-alert', key: 'note' } as const, null as SetupNote)
 const line = atom({ plugin: 'cache-alert', key: 'line' } as const, null as CacheLine)
@@ -33,7 +33,7 @@ const SAFETY_MARGIN_MS = 5_000
 const RETRY_MS = 20_000
 // The band shows a mm:ss clock; it is only redrawn when its text changes
 const TICK_MS = 1_000
-// /theme may not raise config.set: look again this often
+// /theme raises no event a mod can see: look again this often
 const THEME_POLL_MS = 5_000
 
 // Module variables start over on each reload, as these should
@@ -215,28 +215,9 @@ async function sendTest($: EngineInterface) {
   await setNote($, reply.ok ? 'Test message sent.' : `Telegram send failed: ${reply.description ?? 'unknown error'}`, !reply.ok)
 }
 
-// The /rename title, else the start-time title, else the slug, else the id
+// The session's title at start, else its id
 async function sessionLabel($: EngineInterface): Promise<string> {
-  const i = await read($, info)
-  let slug = ''
-  if (i.transcriptPath) {
-    try {
-      const { stdout } = await $.process.run(['tail', '-c', '131072', i.transcriptPath], { timeoutMs: 5_000 })
-      for (const line of stdout.split('\n').reverse()) {
-        if (!line.includes('"custom-title"') && (slug || !line.includes('"slug"'))) continue
-        try {
-          const entry = JSON.parse(line) as { type?: string; customTitle?: string; slug?: string }
-          if (entry.type === 'custom-title' && entry.customTitle) return entry.customTitle
-          if (!slug && entry.slug) slug = entry.slug
-        } catch {
-          // the tail's cut first line
-        }
-      }
-    } catch {
-      // no tail on this host
-    }
-  }
-  return i.title || slug || (await $.session.id()).slice(0, 8)
+  return (await read($, info)).title || (await $.session.id()).slice(0, 8)
 }
 
 async function cacheLine($: EngineInterface): Promise<CacheLine> {
@@ -366,12 +347,7 @@ export const register: Register = on => {
   })
 
   on('classic.SessionStart', async ($, e, next) => {
-    await update($, info, () => ({ transcriptPath: e.transcript_path, title: e.session_title ?? '' }))
-    return next(e)
-  })
-
-  on('classic.Stop', async ($, e, next) => {
-    await update($, info, cur => (cur.transcriptPath === e.transcript_path ? cur : { ...cur, transcriptPath: e.transcript_path }))
+    await update($, info, () => ({ title: e.session_title ?? '' }))
     return next(e)
   })
 

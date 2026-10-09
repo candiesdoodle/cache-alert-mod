@@ -85,10 +85,10 @@ What the mod reads, sends, runs and hooks, in full.
 **What it reads.**
 
 - Token usage counts from each finished turn (`turn.complete`), to know when the cache was last refreshed. It reads no message text.
-- The transcript path and session title from Claude Code's session start, and the transcript path at each stop (`classic.SessionStart`, `classic.Stop`). These hooks change nothing and pass every event on unchanged.
+- The session title from Claude Code's session start (`classic.SessionStart`), for the alert message. The hook changes nothing and passes the event on unchanged.
 - Your `theme` setting (`config.list`), every 5 seconds, to colour the band to match. It is not sent anywhere.
 
-**Programs it runs.** One, when an alert goes to Telegram: `tail -c 131072 <this session's transcript>`, to find the session's `/rename` title (or slug) for the message. Only that title or slug is used.
+**Programs it runs.** None.
 
 **What it does in your session** (the chat action you pick in setup):
 

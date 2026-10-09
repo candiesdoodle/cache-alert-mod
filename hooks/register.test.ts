@@ -22,7 +22,6 @@ function world(on: On, settings?: object, chats: object[] = []) {
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('session.cwd', () => ({ value: '/home/u/proj' }))
   on('session.id', () => ({ value: 'abcdef1234567890' }))
-  on('process.run', () => ({ value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
   on('http.fetch', ($, e) => {
     const reply = (body: object) => ({ value: { status: 200, ok: true, headers: {}, text: JSON.stringify(body) } })
     if (e.url.endsWith('/getMe')) {
