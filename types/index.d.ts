@@ -47,7 +47,7 @@ export type CacheLine = {
   /** The notifications are on; when off, only the chat action runs. */
   notify: boolean
   /** What follows the notifications in the chat (/compact, "be right back"); null for nothing. */
-  then: string | null
+  followUp: string | null
 } | null
 
 /** The setup pane's last result line. */

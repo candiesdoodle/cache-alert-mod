@@ -72,9 +72,9 @@ function lineText(l: NonNullable<CacheLine>): string {
   return `Cache (${l.ttl}): Status ${l.icon} ${l.state}${l.alert === null ? '' : ` ; Alert 🔔 ${l.alert}`}`
 }
 
-function actionText(channels: readonly string[], then: string | null, notify: boolean): string {
+function actionText(channels: readonly string[], followUp: string | null, notify: boolean): string {
   const where = !notify ? null : channels.length ? `Notifications armed for ${channels.join(', ')}` : 'In-app toast only'
-  const what = where && then ? `${where}, then ${then}` : (where ?? then ?? 'none, the alert is off')
+  const what = where && followUp ? `${where}, then ${followUp}` : (where ?? followUp ?? 'none, the alert is off')
   return `Action: ${what} (/cache-alert setup to configure)`
 }
 
@@ -243,21 +243,21 @@ async function cacheLine($: EngineInterface): Promise<CacheLine> {
   const t = await read($, track)
   const s = await read($, settings)
   if (t.mode === 'none') return null
-  const at = { ttl: s.ttl, alert: null, channels: null, then: null, notify: s.notify }
-  const then = await nextAction($, s)
+  const at = { ttl: s.ttl, alert: null, channels: null, followUp: null, notify: s.notify }
+  const followUp = await nextAction($, s)
   const channels = [...(isTelegramReady(s) ? ['Telegram'] : []), ...(s.nativeNotify ? ['Desktop'] : [])]
-  if (t.mode === 'working') return { ...at, icon: '🟢', state: 'active', tone: 'success', channels, then }
+  if (t.mode === 'working') return { ...at, icon: '🟢', state: 'active', tone: 'success', channels, followUp }
   if (t.mode === 'compacted') return { ...at, icon: '♻️', state: 'reset by /compact', tone: 'subtle' }
   const left = expiresAt(t, s) - (await $.clock.now())
   if (left <= 0) return { ...at, icon: '❄️', state: 'COLD', tone: 'subtle' }
   const alertIn = left - leadMs(s)
   const alert = t.isAlerted ? 'sent' : alertIn > 0 ? `in ${fmt(alertIn).replace(/(\d)([ms])$/, '$1 $2')}` : 'due'
-  return { ...at, ...warmth(left, s), state: fmtClock(left), alert, ...(t.isAlerted ? {} : { channels, then }) }
+  return { ...at, ...warmth(left, s), state: fmtClock(left), alert, ...(t.isAlerted ? {} : { channels, followUp }) }
 }
 
 async function statusText($: EngineInterface): Promise<string | undefined> {
   const l = await cacheLine($)
-  return l ? lineText(l) + (l.channels ? `\n${actionText(l.channels, l.then, l.notify)}` : '') : undefined
+  return l ? lineText(l) + (l.channels ? `\n${actionText(l.channels, l.followUp, l.notify)}` : '') : undefined
 }
 
 async function refreshStatus($: EngineInterface) {
@@ -291,9 +291,9 @@ async function fire($: EngineInterface, forRequestAt: number, isRetry: boolean) 
   const left = expiresAt(t, s) - (await $.clock.now())
   if (left <= 0) return
 
-  const then = isRetry ? null : await nextAction($, s)
+  const followUp = isRetry ? null : await nextAction($, s)
   if (!isRetry && s.notify) {
-    $.ui.toast(`Prompt cache expires in ~${fmt(left)}. ${then ? `Sending ${then}.` : 'Send a message to keep it warm.'}`)
+    $.ui.toast(`Prompt cache expires in ~${fmt(left)}. ${followUp ? `Sending ${followUp}.` : 'Send a message to keep it warm.'}`)
     if (s.nativeNotify) $.ui.notify(`Prompt cache expires in ~${fmt(left)}`, { title: 'cache-alert' }).catch(() => undefined)
   }
 
@@ -304,7 +304,7 @@ async function fire($: EngineInterface, forRequestAt: number, isRetry: boolean) 
       `📁 *Project:* \`${basename(await $.session.cwd())}\`\n` +
       `💬 *Session:* \`${await sessionLabel($)}\`\n` +
       `⏳ *Time Remaining:* *~${fmt(left)}* (of ${s.ttl} cache TTL)\n\n` +
-      (then ? `▶️ *Then:* sending ${then} to the session` : `💬 _Send a quick reply to your session to refresh the prompt cache._`)
+      (followUp ? `▶️ *Then:* sending ${followUp} to the session` : `💬 _Send a quick reply to your session to refresh the prompt cache._`)
     const reply = await sendMessage($, s, text)
     if (!reply.ok) {
       isDelivered = false
@@ -315,7 +315,7 @@ async function fire($: EngineInterface, forRequestAt: number, isRetry: boolean) 
   }
 
   // The action goes ahead with or without Telegram, and whether or not the message got through
-  if (then) await runAction($, s)
+  if (followUp) await runAction($, s)
   if (!isDelivered) return
   await update($, track, cur => (cur.lastRequestAt === forRequestAt ? { ...cur, isAlerted: true } : cur))
   await refreshStatus($)
@@ -364,13 +364,6 @@ export const register: Register = on => {
     await refreshStatus($)
     return next(e)
   })
-
-  // /theme, or any other setting change: redraw the band in the new theme's fill
-  on('config.set', async ($, e, next) => {
-    const result = await next(e)
-    if (e.key === 'theme') await readTheme($)
-    return result
-  }).catch(($, e, next) => next(e))
 
   on('classic.SessionStart', async ($, e, next) => {
     await update($, info, () => ({ transcriptPath: e.transcript_path, title: e.session_title ?? '' }))
@@ -452,7 +445,7 @@ export const register: Register = on => {
     const plain = fill === undefined ? {} : { color: 'text' }
     const muted = fill === undefined ? { dimColor: true } : { color: 'inactive' }
     const { Box, Text } = $.ui.resolve(e)
-    const action = l.channels ? actionText(l.channels, l.then, l.notify) : null
+    const action = l.channels ? actionText(l.channels, l.followUp, l.notify) : null
     // The action shares the row while it fits, else takes a row of its own
     const isOneRow = action === null || cells(`${lineText(l)} ; ${action}`) + 2 <= e.props.bodyColumns
     return (

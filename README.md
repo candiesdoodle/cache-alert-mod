@@ -70,6 +70,34 @@ Until the alert goes out, the band also says where it will go, for example `Acti
 - Set the TTL to match your cache. The mod counts from the time of the last turn; it does not ask Anthropic when your cache expires.
 - The bot token is kept in Claude Code's plugin store on your machine. The only network calls go to `api.telegram.org`.
 
+## Privacy and permissions
+
+What the mod reads, sends, runs and hooks, in full.
+
+**Network.** The only host it contacts is `https://api.telegram.org`, and only once you have set up Telegram. It calls three Bot API methods:
+
+- `getMe`, when you save a bot token, to check the token and read the bot's name.
+- `getUpdates`, when you press Detect chat, to find the chat you messaged the bot from.
+- `sendMessage`, for the test message and for each alert. An alert carries the project folder's name, the session's name, the time left on the cache, the TTL, and the chat action it is about to take. It never carries conversation text, prompts, code or file contents.
+
+**The bot token.** It is your own Telegram bot's token, typed into the setup pane. It is stored in Claude Code's plugin store on your machine and sent only to `api.telegram.org`, as the Bot API requires (in the request path). The mod reads no token from your environment or files.
+
+**What it reads.**
+
+- Token usage counts from each finished turn (`turn.complete`), to know when the cache was last refreshed. It reads no message text.
+- The transcript path and session title from Claude Code's session start, and the transcript path at each stop (`classic.SessionStart`, `classic.Stop`). These hooks change nothing and pass every event on unchanged.
+- Your `theme` setting (`config.list`), every 5 seconds, to colour the band to match. It is not sent anywhere.
+
+**Programs it runs.** One, when an alert goes to Telegram: `tail -c 131072 <this session's transcript>`, to find the session's `/rename` title (or slug) for the message. Only that title or slug is used.
+
+**What it does in your session** (the chat action you pick in setup):
+
+- "be right back": submits that fixed text as a prompt (`prompt.submit`). Nothing else is put in it.
+- /compact or /clear: runs that built-in command (`command.run`).
+- Nothing: no change to the chat.
+
+**Other hooks.** It registers the `/cache-alert` command and handles it. It hooks `session.compact` and `session.end` only to cancel a pending alert and reset the band; both pass the event on unchanged. It draws the band above the prompt and the setup pane (`ui.render`). Desktop alerts use Claude Code's own notification call (`ui.notify`). It sets no permissions and changes no settings.
+
 ## Develop
 
 ```

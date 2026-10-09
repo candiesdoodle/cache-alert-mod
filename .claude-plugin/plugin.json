@@ -1,9 +1,16 @@
 {
   "name": "cache-alert",
   "version": "0.1.0",
-  "description": "Status line countdown, plus Telegram and desktop alerts, before this session's prompt cache expires.",
-  "author": { "name": "candiesdoodle" },
+  "description": "Warns before this session's prompt cache expires (a countdown band above the prompt, a toast, desktop and Telegram alerts), and can keep the cache warm, compact or clear the session.",
+  "author": {
+    "name": "candiesdoodle"
+  },
   "license": "MIT",
-  "keywords": ["prompt-cache", "telegram", "notification", "statusline"],
+  "keywords": [
+    "prompt-cache",
+    "telegram",
+    "notification",
+    "cache"
+  ],
   "types": "./types/index.d.ts"
 }
