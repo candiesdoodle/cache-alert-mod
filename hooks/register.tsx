@@ -1,11 +1,22 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
-import type { AlertSettings, CacheLine, CacheTrack, SetupNote } from '../types'
+import type { AlertAction, AlertSettings, CacheLine, CacheTrack, SetupNote } from '../types'
 
 const EMPTY: CacheTrack = { mode: 'none', lastRequestAt: 0, isAlerted: false }
-const DEFAULTS: AlertSettings = { botToken: '', botName: '', chatId: '', ttl: '1h', thresholdPercent: 20, sound: true, nativeNotify: true }
+const DEFAULTS: AlertSettings = { botToken: '', botName: '', chatId: '', ttl: '1h', thresholdPercent: 20, notify: true, sound: true, nativeNotify: true, onAlert: 'brb' }
 const THRESHOLDS = [10, 15, 20, 25, 30, 50]
+const TTLS: readonly { value: AlertSettings['ttl']; label: string }[] = [
+  { value: '1h', label: '1 hour (extended cache)' },
+  { value: '5m', label: '5 minutes (default cache)' },
+]
+const ACTIONS: readonly { value: AlertAction; label: string }[] = [
+  { value: 'none', label: 'Nothing' },
+  { value: 'brb', label: 'Send "be right back" (keeps the cache warm; default)' },
+  { value: 'compact', label: 'Run /compact (summarises while the cache is warm)' },
+  { value: 'clear', label: 'Run /clear (drops the conversation)' },
+]
+const BRB_TEXT = 'be right back'
 
 const track = atom({ plugin: 'cache-alert', key: 'track' } as const, EMPTY)
 const info = atom({ plugin: 'cache-alert', key: 'info' } as const, { transcriptPath: '', title: '' })
@@ -61,9 +72,19 @@ function lineText(l: NonNullable<CacheLine>): string {
   return `Cache (${l.ttl}): Status ${l.icon} ${l.state}${l.alert === null ? '' : ` ; Alert 🔔 ${l.alert}`}`
 }
 
-function actionText(channels: readonly string[]): string {
-  const where = channels.length ? `Notifications armed for ${channels.join(', ')}` : 'In-app toast only'
-  return `Action: ${where} (/cache-alert setup to configure)`
+function actionText(channels: readonly string[], then: string | null, notify: boolean): string {
+  const where = !notify ? null : channels.length ? `Notifications armed for ${channels.join(', ')}` : 'In-app toast only'
+  const what = where && then ? `${where}, then ${then}` : (where ?? then ?? 'none, the alert is off')
+  return `Action: ${what} (/cache-alert setup to configure)`
+}
+
+// The setup pane's checkbox and radio marks, drawn on its buttons
+function checkbox(isOn: boolean): string {
+  return isOn ? '[x]' : '[ ]'
+}
+
+function radio(isOn: boolean): string {
+  return isOn ? '(•)' : '( )'
 }
 
 // Terminal cells a text takes: an emoji or other astral character takes two
@@ -104,8 +125,10 @@ function normalize(raw: unknown): AlertSettings {
     chatId: typeof r.chatId === 'string' ? r.chatId : '',
     ttl: r.ttl === '5m' ? '5m' : '1h',
     thresholdPercent: THRESHOLDS.includes(Number(r.thresholdPercent)) ? Number(r.thresholdPercent) : DEFAULTS.thresholdPercent,
+    notify: r.notify !== false,
     sound: r.sound !== false,
     nativeNotify: r.nativeNotify !== false,
+    onAlert: ACTIONS.some(a => a.value === r.onAlert) ? (r.onAlert as AlertAction) : DEFAULTS.onAlert,
   }
 }
 
@@ -220,26 +243,44 @@ async function cacheLine($: EngineInterface): Promise<CacheLine> {
   const t = await read($, track)
   const s = await read($, settings)
   if (t.mode === 'none') return null
-  const at = { ttl: s.ttl, alert: null, channels: null }
+  const at = { ttl: s.ttl, alert: null, channels: null, then: null, notify: s.notify }
+  const then = await nextAction($, s)
   const channels = [...(isTelegramReady(s) ? ['Telegram'] : []), ...(s.nativeNotify ? ['Desktop'] : [])]
-  if (t.mode === 'working') return { ...at, icon: '🟢', state: 'active', tone: 'success', channels }
+  if (t.mode === 'working') return { ...at, icon: '🟢', state: 'active', tone: 'success', channels, then }
   if (t.mode === 'compacted') return { ...at, icon: '♻️', state: 'reset by /compact', tone: 'subtle' }
   const left = expiresAt(t, s) - (await $.clock.now())
   if (left <= 0) return { ...at, icon: '❄️', state: 'COLD', tone: 'subtle' }
   const alertIn = left - leadMs(s)
   const alert = t.isAlerted ? 'sent' : alertIn > 0 ? `in ${fmt(alertIn).replace(/(\d)([ms])$/, '$1 $2')}` : 'due'
-  return { ...at, ...warmth(left, s), state: fmtClock(left), alert, channels: t.isAlerted ? null : channels }
+  return { ...at, ...warmth(left, s), state: fmtClock(left), alert, ...(t.isAlerted ? {} : { channels, then }) }
 }
 
 async function statusText($: EngineInterface): Promise<string | undefined> {
   const l = await cacheLine($)
-  return l ? lineText(l) + (l.channels ? `\n${actionText(l.channels)}` : '') : undefined
+  return l ? lineText(l) + (l.channels ? `\n${actionText(l.channels, l.then, l.notify)}` : '') : undefined
 }
 
 async function refreshStatus($: EngineInterface) {
   const next = await cacheLine($)
   // Written only on a change, so the band redraws once a second at most
   await update($, line, cur => (JSON.stringify(cur) === JSON.stringify(next) ? cur : next))
+}
+
+// What the alert will do in the chat, as the band and the messages name it; null for nothing
+async function nextAction($: EngineInterface, s: AlertSettings): Promise<string | null> {
+  if (s.onAlert === 'compact') return '/compact'
+  if (s.onAlert === 'clear') return '/clear'
+  if (s.onAlert === 'brb') return `"${BRB_TEXT}"`
+  return null
+}
+
+// Queued, never awaited: each runs once the session is idle, after this alert's own work
+async function runAction($: EngineInterface, s: AlertSettings) {
+  const failed = (err: unknown) => $.ui.log(`cache-alert: the on-alert action failed: ${err instanceof Error ? err.message : String(err)}`)
+  if (s.onAlert === 'compact') void $.command.run({ command: 'compact', args: '' }).catch(failed)
+  if (s.onAlert === 'clear') void $.command.run({ command: 'clear', args: '' }).catch(failed)
+  // Its reply refreshes the cache and re-arms the alert, so this repeats on every alert
+  if (s.onAlert === 'brb') void $.prompt.submit({ text: BRB_TEXT }).catch(failed)
 }
 
 async function fire($: EngineInterface, forRequestAt: number, isRetry: boolean) {
@@ -250,27 +291,32 @@ async function fire($: EngineInterface, forRequestAt: number, isRetry: boolean) 
   const left = expiresAt(t, s) - (await $.clock.now())
   if (left <= 0) return
 
-  if (!isRetry) {
-    $.ui.toast(`Prompt cache expires in ~${fmt(left)}. Send a message to keep it warm.`)
+  const then = isRetry ? null : await nextAction($, s)
+  if (!isRetry && s.notify) {
+    $.ui.toast(`Prompt cache expires in ~${fmt(left)}. ${then ? `Sending ${then}.` : 'Send a message to keep it warm.'}`)
     if (s.nativeNotify) $.ui.notify(`Prompt cache expires in ~${fmt(left)}`, { title: 'cache-alert' }).catch(() => undefined)
   }
 
-  if (isTelegramReady(s)) {
+  let isDelivered = true
+  if (s.notify && isTelegramReady(s)) {
     const text =
       `⚠️ *Claude Code Prompt Cache Expiring Soon!*\n\n` +
       `📁 *Project:* \`${basename(await $.session.cwd())}\`\n` +
       `💬 *Session:* \`${await sessionLabel($)}\`\n` +
       `⏳ *Time Remaining:* *~${fmt(left)}* (of ${s.ttl} cache TTL)\n\n` +
-      `💬 _Send a quick reply to your session to refresh the prompt cache._`
+      (then ? `▶️ *Then:* sending ${then} to the session` : `💬 _Send a quick reply to your session to refresh the prompt cache._`)
     const reply = await sendMessage($, s, text)
     if (!reply.ok) {
+      isDelivered = false
       // Retry until the cache goes cold; each attempt recomputes the time left
       if (left > RETRY_MS) alertTimer = $.clock.after(RETRY_MS, () => void fire($, forRequestAt, true))
       if (!isRetry) $.ui.log(`cache-alert: Telegram delivery failed (${reply.description ?? 'unknown'}), retrying every ${RETRY_MS / 1000}s`)
-      return
     }
   }
 
+  // The action goes ahead with or without Telegram, and whether or not the message got through
+  if (then) await runAction($, s)
+  if (!isDelivered) return
   await update($, track, cur => (cur.lastRequestAt === forRequestAt ? { ...cur, isAlerted: true } : cur))
   await refreshStatus($)
 }
@@ -406,7 +452,7 @@ export const register: Register = on => {
     const plain = fill === undefined ? {} : { color: 'text' }
     const muted = fill === undefined ? { dimColor: true } : { color: 'inactive' }
     const { Box, Text } = $.ui.resolve(e)
-    const action = l.channels ? actionText(l.channels) : null
+    const action = l.channels ? actionText(l.channels, l.then, l.notify) : null
     // The action shares the row while it fits, else takes a row of its own
     const isOneRow = action === null || cells(`${lineText(l)} ; ${action}`) + 2 <= e.props.bodyColumns
     return (
@@ -415,9 +461,14 @@ export const register: Register = on => {
           <Box>
             <Text {...muted}>Cache ({l.ttl}): </Text>
             <Text {...plain}>Status {l.icon} </Text>
-            <Text color={l.tone} bold>
-              {l.state}
-            </Text>
+            {/* COLD and reset by /compact read like the Action text, not fainter */}
+            {l.tone === 'subtle' ? (
+              <Text {...muted}>{l.state}</Text>
+            ) : (
+              <Text color={l.tone} bold>
+                {l.state}
+              </Text>
+            )}
             {l.alert === null ? null : <Text {...muted}> ; </Text>}
             {l.alert === null ? null : <Text {...plain}>Alert 🔔 {l.alert}</Text>}
           </Box>
@@ -434,7 +485,7 @@ export const register: Register = on => {
       const { Text } = $.ui.resolve(e)
       return <Text>Run /cache-alert setup from a terminal or desktop session.</Text>
     }
-    const { Box, Text, Input, Select, Button } = $.ui.resolve(e)
+    const { Box, Text, Input, Button } = $.ui.resolve(e)
     const tokenHint = s.botToken ? `saved ••••${s.botToken.slice(-4)}${s.botName ? ` (@${s.botName})` : ''}; paste to replace` : 'paste the token from @BotFather'
     const leadMin = (p: number) => fmt((ttlMs(s) * p) / 100)
 
@@ -443,36 +494,48 @@ export const register: Register = on => {
         <Text bold>Telegram</Text>
         <Text dimColor>1. In Telegram, message @BotFather, send /newbot, and paste the token it gives you below.</Text>
         <Input key="token" label="Bot token " placeholder={tokenHint} value="" submitLabel="save" onSubmit={v => void saveToken($, v)} />
-        <Text dimColor>2. Send your bot any message, then press Detect chat (or type a chat ID).</Text>
+        <Box marginTop={1}>
+          <Text dimColor>2. Send your bot any message, then press Detect chat (or type a chat ID).</Text>
+        </Box>
         <Box>
           <Input key="chat" label="Chat ID " placeholder={s.chatId ? `saved ${s.chatId}; type to replace` : 'not set'} value="" submitLabel="save" onSubmit={v => void saveChatId($, v)} />
           <Text> </Text>
           <Button key="detect" label="Detect chat" onPress={() => void detectChat($)} />
         </Box>
-        <Text bold>Alerts</Text>
-        <Select
-          key="ttl"
-          label="Cache TTL "
-          value={s.ttl}
-          options={[
-            { value: '1h', label: '1 hour (extended cache)' },
-            { value: '5m', label: '5 minutes (default cache)' },
-          ]}
-          onSelect={v => void saveSettings($, cur => ({ ...cur, ttl: v === '5m' ? '5m' : '1h' }))}
-        />
-        <Select
-          key="threshold"
-          label="Alert when left "
-          value={String(s.thresholdPercent)}
-          options={THRESHOLDS.map(p => ({ value: String(p), label: `${p}% (${leadMin(p)})` }))}
-          onSelect={v => void saveSettings($, cur => ({ ...cur, thresholdPercent: Number(v) }))}
-        />
-        <Box>
-          <Button key="sound" label={`Telegram sound: ${s.sound ? 'on' : 'off'}`} onPress={() => void saveSettings($, cur => ({ ...cur, sound: !cur.sound }))} />
-          <Text> </Text>
-          <Button key="notify" label={`Desktop notification: ${s.nativeNotify ? 'on' : 'off'}`} onPress={() => void saveSettings($, cur => ({ ...cur, nativeNotify: !cur.nativeNotify }))} />
+        <Box flexDirection="column" marginTop={1}>
+          <Text bold>Cache</Text>
+          <Text>Cache TTL</Text>
+          <Box marginLeft={4} flexWrap="wrap" columnGap={2}>
+            {TTLS.map(t => (
+              <Button key={`ttl-${t.value}`} label={`${radio(s.ttl === t.value)} ${t.label}`} onPress={() => void saveSettings($, cur => ({ ...cur, ttl: t.value }))} />
+            ))}
+          </Box>
+          <Text>Alert when left</Text>
+          <Box marginLeft={4} flexWrap="wrap" columnGap={2}>
+            {THRESHOLDS.map(p => (
+              <Button key={`threshold-${p}`} label={`${radio(s.thresholdPercent === p)} ${p}% (${leadMin(p)})`} onPress={() => void saveSettings($, cur => ({ ...cur, thresholdPercent: p }))} />
+            ))}
+          </Box>
         </Box>
-        <Box>
+        <Box flexDirection="column" marginTop={1}>
+          <Text bold>When the alert fires</Text>
+          <Text dimColor>Notify, do one thing in the chat, or both.</Text>
+          <Button key="notify" label={`${checkbox(s.notify)} Notify`} onPress={() => void saveSettings($, cur => ({ ...cur, notify: !cur.notify }))} />
+          {s.notify ? (
+            <Box marginLeft={4}>
+              <Button key="desktop" label={`${checkbox(s.nativeNotify)} Desktop notification`} onPress={() => void saveSettings($, cur => ({ ...cur, nativeNotify: !cur.nativeNotify }))} />
+              <Text> </Text>
+              <Button key="sound" label={`${checkbox(s.sound)} Telegram sound`} onPress={() => void saveSettings($, cur => ({ ...cur, sound: !cur.sound }))} />
+            </Box>
+          ) : null}
+          <Box marginTop={1}>
+            <Text dimColor>In the chat (pick one):</Text>
+          </Box>
+          {ACTIONS.map(a => (
+            <Button key={`onAlert-${a.value}`} label={`${radio(s.onAlert === a.value)} ${a.label}`} onPress={() => void saveSettings($, cur => ({ ...cur, onAlert: a.value }))} />
+          ))}
+        </Box>
+        <Box marginTop={1}>
           <Button key="test" variant="primary" label="Send test" onPress={() => void sendTest($)} />
           <Text> </Text>
           {s.botToken ? (

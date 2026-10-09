@@ -4,7 +4,7 @@ import type { Engine, FoundElement } from 'claude-code/testing'
 
 const MIN = 60_000
 const CACHED: TurnUsage = { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 5000, cache_creation_input_tokens: 100, model: 'm' }
-const READY = { botToken: '123:abc', botName: 'mybot', chatId: '42', ttl: '1h', thresholdPercent: 20, sound: true, nativeNotify: true }
+const READY = { botToken: '123:abc', botName: 'mybot', chatId: '42', ttl: '1h', thresholdPercent: 20, sound: true, nativeNotify: true, onAlert: 'none' }
 
 function world(on: On, settings?: object, chats: object[] = []) {
   const clock = mock.clock(on, { now: 1_000_000 })
@@ -39,7 +39,22 @@ function world(on: On, settings?: object, chats: object[] = []) {
   // The /theme row as /config lists it; a test changes it with setTheme
   const prefs = { theme: 'dark' }
   on('config.list', () => ({ value: [{ key: 'theme', value: prefs.theme }] as never }))
-  return { clock, statuses, toasts, sent, store, setTheme: (name: string) => void (prefs.theme = name) }
+  // What the on-alert action queued: slash commands run, prompts submitted
+  const commands: string[] = []
+  const prompts: string[] = []
+  on('command.run', ($, e) => (commands.push(e.command), {}))
+  on('prompt.submit', ($, e) => (prompts.push(e.text), { text: e.text }))
+  return { clock, statuses, toasts, sent, store, commands, prompts, setTheme: (name: string) => void (prefs.theme = name) }
+}
+
+const DEFAULTS_FOR_TEST = { botToken: '', botName: '', chatId: '', ttl: '1h', thresholdPercent: 20, sound: true, nativeNotify: true, onAlert: 'none' }
+
+// The band's action line (Action: ...), or undefined when it shows none
+async function shownAction($: Engine) {
+  const ui = await $.ui.mount({ plugin: 'cache-alert', surface: 'terminal', ...BAND, props: { ...BAND.props, bodyColumns: 300 } })
+  const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text).join('')
+  await ui.unmount()
+  return texts.match(/Action:.*$/)?.[0]
 }
 
 const start = { cwd: '/home/u/proj', surface: 'terminal', isInteractive: true } as const
@@ -173,7 +188,7 @@ test('a new threshold in setup moves the pending alert', { timeoutMs: 60_000 }, 
   await $.turn.start({ text: 'hi', turnId: 't1' })
   await $.turn.complete(done(CACHED))
   const ui = await $.ui.mount({ plugin: 'cache-alert', surface: 'terminal', ...SETUP })
-  await ui.select({ key: 'threshold', value: '50' })
+  await ui.press({ key: 'threshold-50' })
   expect(w.store.get('settings')).toMatchObject({ thresholdPercent: 50 })
   await w.clock.advance(30 * MIN)
   expect(w.sent).toHaveLength(1)
@@ -276,4 +291,85 @@ test('the band fill follows the theme, and leaves an auto theme unfilled', { tim
   w.setTheme('auto')
   await w.clock.advance(5_000)
   expect(await fills()).toEqual([])
+})
+
+for (const [onAlert, command] of [['compact', 'compact'], ['clear', 'clear']] as const) {
+  test(`on alert, /${command} runs after the notifications, and the message says so`, { timeoutMs: 60_000 }, async ($, on) => {
+    const w = world(on, { ...READY, onAlert })
+    await $.session.start(start)
+    await $.turn.start({ text: 'hi', turnId: 't1' })
+    await $.turn.complete(done(CACHED))
+    expect(await shownAction($)).toContain(`, then /${command} (`)
+    await w.clock.advance(47 * MIN)
+    expect(w.commands).toEqual([])
+    await w.clock.advance(1 * MIN)
+    expect(w.commands).toEqual([command])
+    expect(w.sent[0]).toContain(`sending /${command}`)
+    expect(w.toasts.at(-1)).toContain(`Sending /${command}.`)
+  })
+}
+
+test('on alert without Telegram, the action still runs', { timeoutMs: 60_000 }, async ($, on) => {
+  const w = world(on, { ...DEFAULTS_FOR_TEST, onAlert: 'compact' })
+  await $.session.start(start)
+  await $.turn.start({ text: 'hi', turnId: 't1' })
+  await $.turn.complete(done(CACHED))
+  await w.clock.advance(48 * MIN)
+  expect(w.sent).toHaveLength(0)
+  expect(w.commands).toEqual(['compact'])
+})
+
+test('"be right back" goes out on every alert, keeping the cache warm', { timeoutMs: 120_000 }, async ($, on) => {
+  const w = world(on, { ...READY, onAlert: 'brb' })
+  await $.session.start(start)
+  const turn = async () => {
+    await $.turn.start({ text: 'x', turnId: 't' })
+    await $.turn.complete(done(CACHED))
+  }
+  await turn()
+  expect(await shownAction($)).toContain(', then "be right back" (')
+  for (let i = 1; i <= 5; i++) {
+    await w.clock.advance(48 * MIN)
+    expect(w.prompts).toHaveLength(i)
+    expect(JSON.parse(w.sent.at(-1) ?? '{}').text).toContain('sending "be right back"')
+    // The engine runs the queued prompt as a turn of its own
+    await turn()
+  }
+  expect(w.prompts.every(p => p === 'be right back')).toBe(true)
+})
+
+test('with Notify off only the chat action runs, and the band says so', { timeoutMs: 60_000 }, async ($, on) => {
+  const w = world(on, { ...READY, notify: false, onAlert: 'compact' })
+  await $.session.start(start)
+  await $.turn.start({ text: 'hi', turnId: 't1' })
+  await $.turn.complete(done(CACHED))
+  expect(await shownAction($)).toBe('Action: /compact (/cache-alert setup to configure)')
+  await w.clock.advance(48 * MIN)
+  expect(w.sent).toHaveLength(0)
+  expect(w.toasts.some(t => t.includes('expires'))).toBe(false)
+  expect(w.commands).toEqual(['compact'])
+})
+
+test('setup ticks Notify and picks one chat action, "be right back" by default', { timeoutMs: 60_000 }, async ($, on) => {
+  const w = world(on)
+  await $.session.start(start)
+  const ui = await $.ui.mount({ plugin: 'cache-alert', surface: 'terminal', ...SETUP })
+  const label = async (key: string) => (await ui.find({ key }))?.props.label
+  expect(await label('notify')).toBe('[x] Notify')
+  expect(await label('onAlert-brb')).toBe('(•) Send "be right back" (keeps the cache warm; default)')
+  await ui.press({ key: 'onAlert-none' })
+  expect(await label('onAlert-none')).toBe('(•) Nothing')
+  expect(await label('ttl-1h')).toBe('(•) 1 hour (extended cache)')
+  await ui.press({ key: 'ttl-5m' })
+  expect(await label('ttl-1h')).toBe('( ) 1 hour (extended cache)')
+  expect(await label('threshold-20')).toBe('(•) 20% (1m)')
+
+  await ui.press({ key: 'onAlert-brb' })
+  expect(await label('onAlert-brb')).toBe('(•) Send "be right back" (keeps the cache warm; default)')
+  expect(await label('onAlert-none')).toBe('( ) Nothing')
+  await ui.press({ key: 'notify' })
+  expect(await label('notify')).toBe('[ ] Notify')
+  expect(await ui.find({ key: 'desktop' })).toBeUndefined()
+  expect(w.store.get('settings')).toMatchObject({ notify: false, onAlert: 'brb' })
+  await ui.unmount()
 })

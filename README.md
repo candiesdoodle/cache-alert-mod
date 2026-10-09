@@ -24,8 +24,13 @@ A setup pane opens:
 
 1. In Telegram, message [@BotFather](https://t.me/BotFather), send `/newbot`, and paste the token it gives you into **Bot token**, then press Enter. The mod checks the token with Telegram before saving it.
 2. Send your new bot any message in Telegram, then press **Detect chat**. You can also type a chat ID (a group or channel ID works too).
-3. Choose the **Cache TTL** (1 hour or 5 minutes) and when to alert (10–50% of the TTL left; 20% of 1h is 12 minutes).
-4. Press **Send test**.
+3. Under **Cache**, pick the **Cache TTL** (1 hour or 5 minutes) and when to alert (10–50% of the TTL left; 20% of 1h is 12 minutes).
+4. Under **When the alert fires**, tick **Notify** (the toast, plus Desktop and Telegram where set up), pick one thing to do in the chat, or both:
+   - **Nothing**: no change to the chat.
+   - **Send "be right back"** (the default): sends that message as a prompt, so the reply refreshes the cache. The reply re-arms the alert, so while you are away it repeats on every alert and keeps the cache warm.
+   - **Run /compact**: summarises the conversation while the cache is still warm, so the summary is cheaper to make.
+   - **Run /clear**: drops the conversation, so there is no cache left to lose. This cannot be undone.
+5. Press **Send test**.
 
 Settings are saved across sessions. Without Telegram you still get the toast and the desktop notification.
 
@@ -33,7 +38,7 @@ Settings are saved across sessions. Without Telegram you still get the toast and
 
 The time left is coloured green, yellow or red to match the icon. Collapse the band with its `[-]` mark.
 
-Until the alert goes out, the band also says where it will go, for example `Action: Notifications armed for Telegram, Desktop (/cache-alert setup to configure)`. On a narrow terminal that moves to a second row.
+Until the alert goes out, the band also says where it will go, for example `Action: Notifications armed for Telegram, Desktop, then /compact (/cache-alert setup to configure)`. On a narrow terminal that moves to a second row.
 
 | Shown | Meaning |
 | --- | --- |

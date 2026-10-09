@@ -14,6 +14,9 @@ export type SessionInfo = {
   title: string
 }
 
+/** What the mod does in the chat when the alert fires, with or without the notifications. */
+export type AlertAction = 'none' | 'brb' | 'compact' | 'clear'
+
 /** What /cache-alert setup writes; kept in $.store across sessions. */
 export type AlertSettings = {
   botToken: string
@@ -23,8 +26,11 @@ export type AlertSettings = {
   ttl: '1h' | '5m'
   /** Alert when this share of the TTL remains. */
   thresholdPercent: number
+  /** Notify at all: the toast, plus Desktop and Telegram where set up. */
+  notify: boolean
   sound: boolean
   nativeNotify: boolean
+  onAlert: AlertAction
 }
 
 /** What the band above the prompt shows; null when there is no cached turn. */
@@ -38,6 +44,10 @@ export type CacheLine = {
   alert: string | null
   /** Where the coming alert goes (Telegram, Desktop); null once there is no alert to come. */
   channels: string[] | null
+  /** The notifications are on; when off, only the chat action runs. */
+  notify: boolean
+  /** What follows the notifications in the chat (/compact, "be right back"); null for nothing. */
+  then: string | null
 } | null
 
 /** The setup pane's last result line. */
