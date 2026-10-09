@@ -1,0 +1,14 @@
+{
+  "name": "cache-alert",
+  "description": "Prompt cache expiry alerts for Claude Code.",
+  "owner": {
+    "name": "candiesdoodle"
+  },
+  "plugins": [
+    {
+      "name": "cache-alert",
+      "source": "./",
+      "description": "Status line countdown, plus Telegram and desktop alerts, before your Claude Code prompt cache expires."
+    }
+  ]
+}

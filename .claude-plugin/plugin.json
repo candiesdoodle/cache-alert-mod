@@ -1,0 +1,9 @@
+{
+  "name": "cache-alert",
+  "version": "0.1.0",
+  "description": "Status line countdown, plus Telegram and desktop alerts, before this session's prompt cache expires.",
+  "author": { "name": "candiesdoodle" },
+  "license": "MIT",
+  "keywords": ["prompt-cache", "telegram", "notification", "statusline"],
+  "types": "./types/index.d.ts"
+}
